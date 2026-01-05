@@ -1,13 +1,16 @@
 import csv
+import os
 import re
 import time
+from pathlib import Path
 from urllib.parse import urljoin
 
-import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 
 BASE = "https://www.canac.ca"
-START_URL = "https://www.canac.ca/canac/fr/2/c/AUB?tag_product=Liquidation"
+START_URL = "https://www.canac.ca/canac/fr/2/c/AUB"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -121,53 +124,106 @@ def extract_product(block):
     }
 
 
-def scrape_canac_50_plus(output_csv="canac_50plus.csv", max_pages=300, sleep_s=1.2):
+def scrape_canac_50_plus(
+    output_csv="data/canac/canac_aub_50plus.csv", max_pages=300, sleep_s=1.3
+):
     rows = []
-    session = requests.Session()
-    session.headers.update(HEADERS)
+    output_path = Path(output_csv)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    for page in range(1, max_pages + 1):
-        url = START_URL + f"&currentPage={page}"
-        r = session.get(url, timeout=30)
-        if r.status_code != 200:
-            print(f"Page {page}: HTTP {r.status_code} -> stop")
-            break
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent=HEADERS["User-Agent"], locale="fr-CA"
+        )
+        page = context.new_page()
 
-        blocks = find_products_on_page(r.text)
-        if not blocks:
-            print(f"Page {page}: 0 produit detecte -> stop")
-            break
+        for page_number in range(1, max_pages + 1):
+            url = f"{START_URL}?currentPage={page_number}"
+            try:
+                response = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            except PlaywrightTimeoutError:
+                print(f"Page {page_number}: timeout -> stop")
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    print(
+                        "Le site peut bloquer les IP datacenter; tester aussi en local"
+                    )
+                break
 
-        page_count = 0
-        for b in blocks:
-            p = extract_product(b)
+            status = response.status if response else None
+            if status == 403:
+                print(f"Page {page_number}: HTTP 403 -> stop")
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    print(
+                        "Le site peut bloquer les IP datacenter; tester aussi en local"
+                    )
+                break
+            if status and status != 200:
+                print(f"Page {page_number}: HTTP {status} -> stop")
+                break
 
-            # filtre >= 50% (et seulement si % calculable)
-            if p["discount_pct"] is not None and p["discount_pct"] >= 50:
-                rows.append(p)
-                page_count += 1
+            try:
+                page.wait_for_selector("text=Code produit", timeout=20000)
+            except PlaywrightTimeoutError:
+                print(f"Page {page_number}: aucun produit detecte -> stop")
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    print(
+                        "Le site peut bloquer les IP datacenter; tester aussi en local"
+                    )
+                break
 
-        print(f"Page {page}: {len(blocks)} blocs, {page_count} produits >=50%")
-        time.sleep(sleep_s)
+            html = page.content()
+            blocks = find_products_on_page(html)
+            if not blocks:
+                print(f"Page {page_number}: 0 produit detecte -> stop")
+                break
+
+            page_count = 0
+            for b in blocks:
+                p = extract_product(b)
+
+                if p["discount_pct"] is not None and p["discount_pct"] >= 50:
+                    rows.append(p)
+                    page_count += 1
+
+            print(
+                f"Page {page_number}: {len(blocks)} produits détectés | "
+                f"{page_count} gardés (>=50%)"
+            )
+            time.sleep(sleep_s)
+
+        context.close()
+        browser.close()
 
     # Ecriture CSV
     fieldnames = [
-        "name",
-        "sku",
-        "price_regular",
-        "price_sale",
-        "discount_pct",
-        "availability",
-        "url",
-        "image",
+        "Nom",
+        "Image",
+        "Prix original",
+        "Prix réduit",
+        "% rabais",
+        "Disponibilité",
+        "Lien",
+        "SKU",
     ]
-    with open(output_csv, "w", newline="", encoding="utf-8") as f:
+    with output_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         for r in rows:
-            w.writerow({k: r.get(k) for k in fieldnames})
+            w.writerow(
+                {
+                    "Nom": r.get("name"),
+                    "Image": r.get("image"),
+                    "Prix original": r.get("price_regular"),
+                    "Prix réduit": r.get("price_sale"),
+                    "% rabais": r.get("discount_pct"),
+                    "Disponibilité": r.get("availability"),
+                    "Lien": r.get("url"),
+                    "SKU": r.get("sku"),
+                }
+            )
 
-    print(f"OK: {len(rows)} produits >=50% ecrits dans {output_csv}")
+    print(f"OK: {len(rows)} produits >=50% ecrits dans {output_path}")
 
 
 if __name__ == "__main__":
