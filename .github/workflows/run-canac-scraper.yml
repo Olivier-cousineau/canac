@@ -1,4 +1,98 @@
-      - name: Publish to econoplus (reset to origin/main, copy, commit, rebase, push)
+name: Run CANAC Scraper (Self-hosted) and Publish + Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      scraper_path:
+        description: "Chemin COMPLET sur le runner vers canac_local (où est run_all_canac_stores.py)"
+        required: true
+        default: "C:\\Users\\Oliver\\Desktop\\canac_local"
+      econoplus_path:
+        description: "Chemin COMPLET sur le runner vers la racine du repo econoplus (contient .git)"
+        required: true
+        default: "C:\\Users\\Oliver\\Desktop\\econoplus"
+      scraper_entry:
+        description: "Fichier python d'entrée"
+        required: false
+        default: "run_all_canac_stores.py"
+      out_dir:
+        description: "Dossier final de sortie (dans scraper_path) contenant les fichiers nommés ville+id"
+        required: false
+        default: "out_canac_json"
+      publish_subdir:
+        description: "Sous-dossier dans econoplus/public (ex: canac)"
+        required: false
+        default: "canac"
+      commit_message:
+        description: "Message de commit"
+        required: false
+        default: "Update CANAC liquidations"
+
+concurrency:
+  group: econoplus-canac-publish
+  cancel-in-progress: true
+
+jobs:
+  run-and-publish:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout (workflow repo only)
+        uses: actions/checkout@v4
+
+      - name: Validate paths
+        shell: powershell
+        env:
+          SCRAPER_PATH: ${{ inputs.scraper_path }}
+          ECONOPLUS_PATH: ${{ inputs.econoplus_path }}
+          SCRAPER_ENTRY: ${{ inputs.scraper_entry }}
+          OUT_DIR: ${{ inputs.out_dir }}
+          PUBLISH_SUBDIR: ${{ inputs.publish_subdir }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "SCRAPER_PATH   = $env:SCRAPER_PATH"
+          Write-Host "ECONOPLUS_PATH = $env:ECONOPLUS_PATH"
+          Write-Host "SCRAPER_ENTRY  = $env:SCRAPER_ENTRY"
+          Write-Host "OUT_DIR        = $env:OUT_DIR"
+          Write-Host "PUBLISH_SUBDIR = $env:PUBLISH_SUBDIR"
+
+          if (-not (Test-Path $env:SCRAPER_PATH)) { throw "Scraper path not found: $env:SCRAPER_PATH" }
+
+          $entryFull = Join-Path $env:SCRAPER_PATH $env:SCRAPER_ENTRY
+          if (-not (Test-Path $entryFull)) { throw "Entry script not found: $entryFull" }
+
+          $gitFolder = Join-Path $env:ECONOPLUS_PATH ".git"
+          if (-not (Test-Path $gitFolder)) {
+            throw "ECONOPLUS_PATH must be repo root containing .git. Not found: $gitFolder"
+          }
+
+      - name: Run CANAC scraper (LOCAL)
+        shell: powershell
+        env:
+          SCRAPER_PATH: ${{ inputs.scraper_path }}
+          SCRAPER_ENTRY: ${{ inputs.scraper_entry }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-Location $env:SCRAPER_PATH
+
+          $python = if (Test-Path ".\.venv\Scripts\python.exe") { ".\.venv\Scripts\python.exe" } else { "python" }
+
+          Write-Host "Using python: $python"
+          Write-Host "Running: $env:SCRAPER_ENTRY"
+          & $python $env:SCRAPER_ENTRY
+
+      - name: Upload CANAC output as artifact (preview)
+        uses: actions/upload-artifact@v4
+        with:
+          name: canac_output_preview
+          path: |
+            ${{ inputs.scraper_path }}\${{ inputs.out_dir }}\*.json
+            ${{ inputs.scraper_path }}\${{ inputs.out_dir }}\*.csv
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Publish to econoplus (reset->copy->commit->rebase->push)
         shell: powershell
         env:
           SCRAPER_PATH: ${{ inputs.scraper_path }}
@@ -9,19 +103,20 @@
         run: |
           $ErrorActionPreference = "Stop"
 
-          # 1) Aller dans econoplus et repartir proprement du remote
+          # 1) Sync propre avec origin/main (évite non-fast-forward et rebase bloqué)
           Set-Location $env:ECONOPLUS_PATH
           git fetch origin
           git checkout main
           git reset --hard origin/main
 
-          # 2) Copier les fichiers depuis le dossier final du scraper
+          # 2) Copier les fichiers générés
           $outFull = Join-Path $env:SCRAPER_PATH $env:OUT_DIR
           if (-not (Test-Path $outFull)) { throw "Output folder not found: $outFull" }
 
           $target = Join-Path $env:ECONOPLUS_PATH ("public\" + $env:PUBLISH_SUBDIR)
           if (-not (Test-Path $target)) { New-Item -ItemType Directory -Path $target | Out-Null }
 
+          # IMPORTANT: ceci efface le dossier public/canac puis recopie seulement ce run
           Write-Host "Cleaning target: $target"
           Get-ChildItem -Path $target -Force -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
 
