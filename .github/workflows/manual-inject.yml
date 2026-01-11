@@ -1,0 +1,69 @@
+name: Manual Inject Liquidations
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_injection:
+        description: "Run the liquidation injection script"
+        required: false
+        default: "false"
+      data_dir:
+        description: "Directory containing liquidation JSON files"
+        required: false
+        default: "data"
+      base_url:
+        description: "Base URL for Econoplus (e.g. https://econoplus.example.com/api)"
+        required: false
+      endpoint:
+        description: "Endpoint path for liquidation ingestion"
+        required: false
+        default: "/liquidations/import"
+      public:
+        description: "Public identifier"
+        required: false
+        default: "canac"
+      ville:
+        description: "Ville (city) identifier"
+        required: false
+      site_id:
+        description: "Site id to send"
+        required: false
+
+jobs:
+  manual-inject:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show inputs
+        run: |
+          echo "run_injection: ${{ inputs.run_injection }}"
+          echo "data_dir: ${{ inputs.data_dir }}"
+          echo "base_url: ${{ inputs.base_url }}"
+          echo "endpoint: ${{ inputs.endpoint }}"
+          echo "public: ${{ inputs.public }}"
+          echo "ville: ${{ inputs.ville }}"
+          echo "site_id: ${{ inputs.site_id }}"
+
+      - name: Run injection script
+        if: ${{ inputs.run_injection == 'true' }}
+        env:
+          ECONOPLUS_TOKEN: ${{ secrets.ECONOPLUS_TOKEN }}
+        run: |
+          if [ -z "${{ inputs.base_url }}" ] || [ -z "${{ inputs.ville }}" ] || [ -z "${{ inputs.site_id }}" ]; then
+            echo "base_url, ville, and site_id are required when run_injection is true."
+            exit 1
+          fi
+          python scripts/inject_liquidations.py \
+            --data-dir "${{ inputs.data_dir }}" \
+            --base-url "${{ inputs.base_url }}" \
+            --endpoint "${{ inputs.endpoint }}" \
+            --public "${{ inputs.public }}" \
+            --ville "${{ inputs.ville }}" \
+            --id "${{ inputs.site_id }}"
