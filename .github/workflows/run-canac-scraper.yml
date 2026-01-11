@@ -27,10 +27,10 @@ on:
         description: "Message de commit"
         required: false
         default: "Update CANAC liquidations"
-      headless:
-        description: "Headless (true/false) - utilisé seulement si ton script le lit; sinon ignore"
-        required: false
-        default: "true"
+
+concurrency:
+  group: econoplus-canac-publish
+  cancel-in-progress: true
 
 jobs:
   run-and-publish:
@@ -80,7 +80,6 @@ jobs:
 
           Write-Host "Using python: $python"
           Write-Host "Running: $env:SCRAPER_ENTRY"
-
           & $python $env:SCRAPER_ENTRY
 
       - name: Upload CANAC output as artifact (preview)
@@ -115,7 +114,7 @@ jobs:
           Write-Host "Copying from $outFull to $target"
           Copy-Item -Path (Join-Path $outFull "*") -Destination $target -Recurse -Force
 
-      - name: Git commit + push (econoplus)
+      - name: Git sync + commit + push (econoplus)
         shell: powershell
         env:
           ECONOPLUS_PATH: ${{ inputs.econoplus_path }}
@@ -124,14 +123,18 @@ jobs:
           $ErrorActionPreference = "Stop"
           Set-Location $env:ECONOPLUS_PATH
 
+          # Toujours sync avant de pousser (corrige "fetch first")
+          git fetch origin
+          git pull --rebase origin main
+
           git status
           git add .
 
-          # Commit seulement s'il y a des changements (PowerShell safe)
           $hasChanges = (git status --porcelain)
           if ($hasChanges) {
             git commit -m "$env:COMMIT_MESSAGE"
-            git push
           } else {
             Write-Host "No changes to commit"
           }
+
+          git push origin main
