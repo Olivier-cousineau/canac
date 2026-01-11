@@ -1,0 +1,57 @@
+name: Run CANAC Scraper and Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      econoplus_path:
+        description: "Path to the econoplus repo on the self-hosted runner"
+        required: false
+        default: "..\\econoplus"
+      econoplus_repo_url:
+        description: "Optional git clone URL for econoplus if the repo is missing"
+        required: false
+      out_dir:
+        description: "Directory containing CANAC JSON output"
+        required: false
+        default: "out_canac_json"
+      commit_message:
+        description: "Commit message for econoplus updates"
+        required: false
+        default: "Update CANAC liquidations"
+
+jobs:
+  run-scraper:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          $python = if (Test-Path ".\\.venv\\Scripts\\python.exe") { ".\\.venv\\Scripts\\python.exe" } else { "python" }
+          if (Test-Path "requirements.txt") {
+            & $python -m pip install -r requirements.txt
+          } else {
+            Write-Host "No requirements.txt found. Skipping dependency install."
+          }
+
+      - name: Run CANAC scraper
+        shell: pwsh
+        run: |
+          $python = if (Test-Path ".\\.venv\\Scripts\\python.exe") { ".\\.venv\\Scripts\\python.exe" } else { "python" }
+          & $python run_all_canac_stores.py
+
+      - name: Publish to econoplus
+        shell: pwsh
+        env:
+          ECONOPLUS_PATH: ${{ inputs.econoplus_path }}
+          ECONOPLUS_REPO_URL: ${{ inputs.econoplus_repo_url }}
+          OUT_DIR: ${{ inputs.out_dir }}
+          COMMIT_MESSAGE: ${{ inputs.commit_message }}
+        run: |
+          .\\scripts\\publish_to_econoplus.ps1 \
+            -EconoplusPath "$env:ECONOPLUS_PATH" \
+            -EconoplusRepoUrl "$env:ECONOPLUS_REPO_URL" \
+            -OutDir "$env:OUT_DIR" \
+            -CommitMessage "$env:COMMIT_MESSAGE"
