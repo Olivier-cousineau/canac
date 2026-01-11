@@ -22,36 +22,61 @@ on:
 jobs:
   run-scraper:
     runs-on: self-hosted
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Python dependencies
-        shell: pwsh
+      - name: Setup venv + install dependencies
+        shell: powershell
         run: |
-          $python = if (Test-Path ".\\.venv\\Scripts\\python.exe") { ".\\.venv\\Scripts\\python.exe" } else { "python" }
+          $ErrorActionPreference = "Stop"
+
+          # Create venv if missing
+          if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
+            Write-Host "Creating venv..."
+            python -m venv .venv
+          }
+
+          $python = ".\.venv\Scripts\python.exe"
+
+          # Upgrade pip
+          & $python -m pip install -U pip
+
+          # Install deps
           if (Test-Path "requirements.txt") {
+            Write-Host "Installing dependencies from requirements.txt..."
             & $python -m pip install -r requirements.txt
           } else {
             Write-Host "No requirements.txt found. Skipping dependency install."
           }
 
       - name: Run CANAC scraper
-        shell: pwsh
+        shell: powershell
         run: |
-          $python = if (Test-Path ".\\.venv\\Scripts\\python.exe") { ".\\.venv\\Scripts\\python.exe" } else { "python" }
+          $ErrorActionPreference = "Stop"
+          $python = if (Test-Path ".\.venv\Scripts\python.exe") { ".\.venv\Scripts\python.exe" } else { "python" }
+
+          Write-Host "Running CANAC scraper..."
           & $python run_all_canac_stores.py
 
       - name: Publish to econoplus
-        shell: pwsh
+        shell: powershell
         env:
           ECONOPLUS_PATH: ${{ inputs.econoplus_path }}
           ECONOPLUS_REPO_URL: ${{ inputs.econoplus_repo_url }}
           OUT_DIR: ${{ inputs.out_dir }}
           COMMIT_MESSAGE: ${{ inputs.commit_message }}
         run: |
-          .\\scripts\\publish_to_econoplus.ps1 \
-            -EconoplusPath "$env:ECONOPLUS_PATH" \
-            -EconoplusRepoUrl "$env:ECONOPLUS_REPO_URL" \
-            -OutDir "$env:OUT_DIR" \
+          $ErrorActionPreference = "Stop"
+
+          if (-not (Test-Path ".\scripts\publish_to_econoplus.ps1")) {
+            throw "Missing script: scripts\publish_to_econoplus.ps1"
+          }
+
+          Write-Host "Publishing to econoplus..."
+          .\scripts\publish_to_econoplus.ps1 `
+            -EconoplusPath "$env:ECONOPLUS_PATH" `
+            -EconoplusRepoUrl "$env:ECONOPLUS_REPO_URL" `
+            -OutDir "$env:OUT_DIR" `
             -CommitMessage "$env:COMMIT_MESSAGE"
