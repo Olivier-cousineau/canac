@@ -1,82 +1,135 @@
-name: Run CANAC Scraper and Publish
+name: Run CANAC Scraper (Local Runner) and Publish
 
 on:
   workflow_dispatch:
     inputs:
+      scraper_path:
+        description: "Chemin COMPLET sur ton PC vers le dossier du scraper (où est run_all_canac_stores.py)"
+        required: true
+        default: "C:\\CANAC"
       econoplus_path:
-        description: "Path to the econoplus repo on the self-hosted runner"
+        description: "Chemin COMPLET sur ton PC vers la racine du repo econoplus (dossier .git)"
+        required: true
+        default: "C:\\ECONOPLUS"
+      scraper_entry:
+        description: "Nom du fichier d’entrée du scraper"
         required: false
-        default: "..\\econoplus"
-      econoplus_repo_url:
-        description: "Optional git clone URL for econoplus if the repo is missing"
-        required: false
+        default: "run_all_canac_stores.py"
       out_dir:
-        description: "Directory containing CANAC JSON output"
+        description: "Nom du dossier de sortie généré par le scraper (dans scraper_path)"
         required: false
         default: "out_canac_json"
+      publish_subdir:
+        description: "Sous-dossier cible dans econoplus/public (ex: canac)"
+        required: false
+        default: "canac"
       commit_message:
-        description: "Commit message for econoplus updates"
+        description: "Message de commit"
         required: false
         default: "Update CANAC liquidations"
 
 jobs:
-  run-scraper:
+  run-and-publish:
     runs-on: self-hosted
 
     steps:
-      - name: Checkout
+      - name: Checkout (for workflow repo only)
         uses: actions/checkout@v4
 
-      - name: Setup venv + install dependencies
+      - name: Validate paths + show files (debug)
         shell: powershell
+        env:
+          SCRAPER_PATH: ${{ inputs.scraper_path }}
+          ECONOPLUS_PATH: ${{ inputs.econoplus_path }}
+          SCRAPER_ENTRY: ${{ inputs.scraper_entry }}
+          OUT_DIR: ${{ inputs.out_dir }}
+          PUBLISH_SUBDIR: ${{ inputs.publish_subdir }}
         run: |
           $ErrorActionPreference = "Stop"
 
-          # Create venv if missing
-          if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
-            Write-Host "Creating venv..."
-            python -m venv .venv
+          Write-Host "SCRAPER_PATH     = $env:SCRAPER_PATH"
+          Write-Host "ECONOPLUS_PATH   = $env:ECONOPLUS_PATH"
+          Write-Host "SCRAPER_ENTRY    = $env:SCRAPER_ENTRY"
+          Write-Host "OUT_DIR          = $env:OUT_DIR"
+          Write-Host "PUBLISH_SUBDIR   = $env:PUBLISH_SUBDIR"
+
+          if (-not (Test-Path $env:SCRAPER_PATH)) { throw "Scraper path not found: $env:SCRAPER_PATH" }
+          if (-not (Test-Path $env:ECONOPLUS_PATH)) { throw "Econoplus path not found: $env:ECONOPLUS_PATH" }
+
+          $entryFull = Join-Path $env:SCRAPER_PATH $env:SCRAPER_ENTRY
+          if (-not (Test-Path $entryFull)) {
+            throw "Entry script not found: $entryFull"
           }
 
-          $python = ".\.venv\Scripts\python.exe"
-
-          # Upgrade pip
-          & $python -m pip install -U pip
-
-          # Install deps
-          if (Test-Path "requirements.txt") {
-            Write-Host "Installing dependencies from requirements.txt..."
-            & $python -m pip install -r requirements.txt
-          } else {
-            Write-Host "No requirements.txt found. Skipping dependency install."
+          $gitFolder = Join-Path $env:ECONOPLUS_PATH ".git"
+          if (-not (Test-Path $gitFolder)) {
+            throw "ECONOPLUS_PATH must be the repo root (it must contain .git). Not found: $gitFolder"
           }
 
-      - name: Run CANAC scraper
+          Write-Host "OK. Entry script exists and econoplus looks like a git repo."
+
+          Write-Host "===== Scraper folder contents (top-level) ====="
+          Get-ChildItem -Path $env:SCRAPER_PATH -Force | Select-Object Name, Length
+
+      - name: Run CANAC scraper (LOCAL on runner)
         shell: powershell
+        env:
+          SCRAPER_PATH: ${{ inputs.scraper_path }}
+          SCRAPER_ENTRY: ${{ inputs.scraper_entry }}
         run: |
           $ErrorActionPreference = "Stop"
+          Set-Location $env:SCRAPER_PATH
+
+          # Use venv python if present, else system python
           $python = if (Test-Path ".\.venv\Scripts\python.exe") { ".\.venv\Scripts\python.exe" } else { "python" }
 
-          Write-Host "Running CANAC scraper..."
-          & $python run_all_canac_stores.py
+          Write-Host "Using python: $python"
+          Write-Host "Running: $env:SCRAPER_ENTRY"
 
-      - name: Publish to econoplus
+          & $python $env:SCRAPER_ENTRY
+
+      - name: Copy output into econoplus/public/<publish_subdir>
+        shell: powershell
+        env:
+          SCRAPER_PATH: ${{ inputs.scraper_path }}
+          ECONOPLUS_PATH: ${{ inputs.econoplus_path }}
+          OUT_DIR: ${{ inputs.out_dir }}
+          PUBLISH_SUBDIR: ${{ inputs.publish_subdir }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $outFull = Join-Path $env:SCRAPER_PATH $env:OUT_DIR
+          if (-not (Test-Path $outFull)) {
+            throw "Output folder not found: $outFull"
+          }
+
+          $target = Join-Path $env:ECONOPLUS_PATH ("public\" + $env:PUBLISH_SUBDIR)
+
+          Write-Host "Output folder: $outFull"
+          Write-Host "Target folder: $target"
+
+          if (-not (Test-Path $target)) {
+            Write-Host "Target does not exist, creating: $target"
+            New-Item -ItemType Directory -Path $target | Out-Null
+          }
+
+          # Clean target to avoid stale files (optional but recommended)
+          Write-Host "Cleaning target..."
+          Get-ChildItem -Path $target -Force -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+
+          Write-Host "Copying files..."
+          Copy-Item -Path (Join-Path $outFull "*") -Destination $target -Recurse -Force
+
+      - name: Git commit + push (econoplus)
         shell: powershell
         env:
           ECONOPLUS_PATH: ${{ inputs.econoplus_path }}
-          ECONOPLUS_REPO_URL: ${{ inputs.econoplus_repo_url }}
-          OUT_DIR: ${{ inputs.out_dir }}
           COMMIT_MESSAGE: ${{ inputs.commit_message }}
         run: |
           $ErrorActionPreference = "Stop"
+          Set-Location $env:ECONOPLUS_PATH
 
-          if (-not (Test-Path ".\scripts\publish_to_econoplus.ps1")) {
-            throw "Missing script: scripts\publish_to_econoplus.ps1"
-          }
-
-          Write-Host "Publishing to econoplus..."
-          .\scripts\publish_to_econoplus.ps1 `
-            -EconoplusPath "$env:ECONOPLUS_PATH" `
-            -EconoplusRepoUrl "$env:ECONOPLUS_REPO_URL" `
-            -OutDir "$env:OUT_DIR" `
-            -CommitMessage "$env:COMMIT_MESSAGE"
+          git status
+          git add .
+          git commit -m "$env:COMMIT_MESSAGE" || echo "No changes to commit"
+          git push
