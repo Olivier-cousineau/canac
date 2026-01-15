@@ -1,0 +1,4 @@
+.venv/
+out_canac_json/
+data/
+*.csv
