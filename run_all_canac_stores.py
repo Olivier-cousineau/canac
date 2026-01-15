@@ -37,11 +37,14 @@ def slugify(text: str) -> str:
     text = re.sub(r"-{2,}", "-", text).strip("-")
     return text
 
-def wanted_paths(store_id: int, city_slug: str, province: str):
+def store_slug(store_id: int, city_slug: str, province: str):
     store_id_str = f"{store_id:04d}"
     prov_slug = slugify(province)
-    base = f"{store_id_str}-{city_slug}-{prov_slug}_{CATEGORY}_liquidation"
-    return FINAL_DIR / f"{base}.json"
+    return f"{store_id_str}-{city_slug}-{prov_slug}_{CATEGORY}_liquidation"
+
+def wanted_paths(store_id: int, city_slug: str, province: str):
+    base = store_slug(store_id, city_slug, province)
+    return FINAL_DIR / base / "liquidations.json"
 
 def find_store_outputs(store_id: int):
     """
@@ -205,14 +208,14 @@ def main():
 
         run_one_store(store_id, city, province, store_label, city_slug)
 
-        filename = wanted_paths(store_id, city_slug, province).name
+        slug = store_slug(store_id, city_slug, province)
         index_entries.append(
             {
                 "storeId": store_id,
                 "citySlug": city_slug,
                 "province": province,
                 "label": store_label,
-                "filePath": f"/canac/{filename}",
+                "filePath": f"/canac/{slug}/liquidations.json",
             }
         )
 
