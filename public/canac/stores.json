@@ -4,13 +4,13 @@
     "citySlug": "prevost",
     "province": "QC",
     "label": "Prévost (QC)",
-    "filePath": "/canac/0039-prevost-qc_AUB_liquidation.json"
+    "filePath": "/canac/0039-prevost-qc_AUB_liquidation/liquidations.json"
   },
   {
     "storeId": 2,
     "citySlug": "ancienne-lorette",
     "province": "QC",
     "label": "Ancienne-Lorette (QC)",
-    "filePath": "/canac/0002-ancienne-lorette-qc_AUB_liquidation.json"
+    "filePath": "/canac/0002-ancienne-lorette-qc_AUB_liquidation/liquidations.json"
   }
 ]
