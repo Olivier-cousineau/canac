@@ -24,8 +24,10 @@ HEADLESS = True
 MAX_PAGES = None
 TIMEOUT_MS = None
 DEBUG = False
+CONTINUE_ON_ERROR = False
 
 HEADLESS_ENV = {"1", "true", "yes", "on"}
+
 
 def slugify(text: str) -> str:
     text = (text or "").strip().lower()
@@ -41,14 +43,17 @@ def slugify(text: str) -> str:
     text = re.sub(r"-{2,}", "-", text).strip("-")
     return text
 
+
 def store_slug(store_id: int, city_slug: str, province: str):
     store_id_str = f"{store_id:04d}"
     prov_slug = slugify(province)
     return f"{store_id_str}-{city_slug}-{prov_slug}_{CATEGORY}_liquidation"
 
+
 def wanted_paths(store_id: int, city_slug: str, province: str):
     base = store_slug(store_id, city_slug, province)
     return FINAL_DIR / base / "liquidations.json"
+
 
 def find_store_outputs(store_id: int):
     """
@@ -56,18 +61,13 @@ def find_store_outputs(store_id: int):
     ex: data/canac_store39_AUB_liquidation.json
     """
     sid = str(store_id)
-
     jsons = sorted(
         SOURCE_DIR.glob(f"*{sid}*{CATEGORY}*.json"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    csvs = sorted(
-        SOURCE_DIR.glob(f"*{sid}*{CATEGORY}*.csv"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return (jsons[0] if jsons else None, csvs[0] if csvs else None)
+    return (jsons[0] if jsons else None)
+
 
 def load_stores():
     if STORES_FILE.exists():
@@ -81,6 +81,7 @@ def load_stores():
         )
     return json.loads(path.read_text(encoding="utf-8"))
 
+
 def format_label(store_id: int, city: str, province: str, store_label: Optional[str]):
     if store_label:
         return store_label.strip()
@@ -89,6 +90,7 @@ def format_label(store_id: int, city: str, province: str, store_label: Optional[
     if city_clean:
         return f"{city_clean}{suffix}".strip()
     return f"Store {store_id}{suffix}".strip()
+
 
 def to_number(value):
     if value is None:
@@ -107,11 +109,13 @@ def to_number(value):
             return None
     return None
 
+
 def get_first(item: dict, keys):
     for key in keys:
         if key in item:
             return item[key]
     return None
+
 
 def normalize_item(item: dict, store_id: int, store_label: str):
     updated = dict(item)
@@ -120,12 +124,14 @@ def normalize_item(item: dict, store_id: int, store_label: str):
     discount_pct = to_number(get_first(item, ["discount_pct", "discountPercent", "discount_percent"]))
     stock_text = get_first(item, ["stock_text", "stockText"])
 
+    # On force les champs utiles (snake_case + camelCase)
     updated["store_id"] = store_id
     updated["store_label"] = store_label
     updated["price_regular"] = price_regular
     updated["price_sale"] = price_sale
     updated["discount_pct"] = discount_pct
     updated["stock_text"] = stock_text
+
     updated["storeId"] = store_id
     updated["storeLabel"] = store_label
     updated["priceRegular"] = price_regular
@@ -133,6 +139,7 @@ def normalize_item(item: dict, store_id: int, store_label: str):
     updated["discountPercent"] = discount_pct
     updated["stockText"] = stock_text
     return updated
+
 
 def load_items(src_json: Path):
     payload = json.loads(src_json.read_text(encoding="utf-8"))
@@ -143,6 +150,7 @@ def load_items(src_json: Path):
         return items, payload
     return [], None
 
+
 def write_output(dst_json: Path, items: list, payload: Optional[dict]):
     dst_json.parent.mkdir(parents=True, exist_ok=True)
     if payload is None:
@@ -152,12 +160,14 @@ def write_output(dst_json: Path, items: list, payload: Optional[dict]):
     payload["items"] = items
     dst_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-def run_one_store(store_id: int, city: str, province: str, store_label: str, city_slug: str):
-    SOURCE_DIR.mkdir(parents=True, exist_ok=True)
-    FINAL_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n=== Store {store_id} {city} ({province}) ===")
-
+def run_scraper_magasin(store_id: int):
+    """
+    Lance canac_scraper_magasin.py et affiche stdout/stderr complet
+    pour diagnostiquer dans GitHub Actions.
+    IMPORTANT: on ne passe PAS --headless (souvent la cause des crashs).
+    On passe seulement --headed si demandé.
+    """
     python_exe = sys.executable
     script = str(BASE_DIR / "canac_scraper_magasin.py")
 
@@ -175,37 +185,59 @@ def run_one_store(store_id: int, city: str, province: str, store_label: str, cit
     if DEBUG:
         cmd += ["--debug"]
 
-    cmd += ["--headless"] if HEADLESS else ["--headed"]
+    # Changement clé:
+    # - Headless est le défaut (donc on ne passe rien)
+    # - On passe seulement --headed si on veut voir le navigateur
+    if not HEADLESS:
+        cmd += ["--headed"]
 
     print("CMD:", " ".join(cmd))
-    subprocess.run(cmd, check=True)
 
-    # Renommage/copie vers FINAL_DIR (format ville + id)
+    result = subprocess.run(cmd, text=True, capture_output=True)
+
+    if result.stdout:
+        print("\n--- scraper stdout ---\n", result.stdout)
+    if result.stderr:
+        print("\n--- scraper stderr ---\n", result.stderr, file=sys.stderr)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"canac_scraper_magasin.py failed (exit={result.returncode})")
+
+
+def run_one_store(store_id: int, city: str, province: str, store_label: str, city_slug: str):
+    SOURCE_DIR.mkdir(parents=True, exist_ok=True)
+    FINAL_DIR.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n=== Store {store_id} {city} ({province}) ===")
+
+    # 1) Run scraper magasin
+    run_scraper_magasin(store_id)
+
+    # 2) Trouver le JSON généré dans data/
     wanted_json = wanted_paths(store_id, city_slug, province)
-    src_json, src_csv = find_store_outputs(store_id)
+    src_json = find_store_outputs(store_id)
 
     if src_json is None:
         raise FileNotFoundError(
             f"Aucun JSON trouvé pour store {store_id} dans {SOURCE_DIR}. "
-            f"Tes logs disent que ça devrait être dans data/. "
-            f"Vérifie que le fichier existe vraiment."
+            f"Vérifie que canac_scraper_magasin.py écrit bien dans data/."
         )
 
+    # 3) Normaliser + écrire dans public/canac/<slug>/liquidations.json
     items, payload = load_items(src_json)
     normalized = [normalize_item(item, store_id, store_label) for item in items]
     write_output(wanted_json, normalized, payload)
     print(f"OK JSON -> {wanted_json}")
 
-    if src_csv is None:
-        print(f"WARNING: Aucun CSV trouvé pour store {store_id} dans {SOURCE_DIR} (on continue).")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run CANAC scraper for all stores.")
     parser.add_argument("--headed", action="store_true", help="Show the browser while scraping.")
-    parser.add_argument("--headless", action="store_true", help="Run the browser in headless mode.")
+    parser.add_argument("--headless", action="store_true", help="Force headless (not passed to sub-scraper).")
     parser.add_argument("--max-pages", type=int, help="Limit the number of pages per store.")
     parser.add_argument("--timeout-ms", type=int, help="Override page timeout in milliseconds.")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for the scraper.")
+    parser.add_argument("--continue-on-error", action="store_true", help="Continue even if a store fails.")
     return parser.parse_args()
 
 
@@ -224,11 +256,12 @@ def resolve_headless(args) -> bool:
 
 def main():
     args = parse_args()
-    global HEADLESS, MAX_PAGES, TIMEOUT_MS, DEBUG
+    global HEADLESS, MAX_PAGES, TIMEOUT_MS, DEBUG, CONTINUE_ON_ERROR
     HEADLESS = resolve_headless(args)
     MAX_PAGES = args.max_pages
     TIMEOUT_MS = args.timeout_ms
     DEBUG = args.debug
+    CONTINUE_ON_ERROR = args.continue_on_error
 
     stores = load_stores()
     index_entries = []
@@ -240,7 +273,15 @@ def main():
         store_label = format_label(store_id, city, province, s.get("store_label") or s.get("label"))
         city_slug = slugify(city)
 
-        run_one_store(store_id, city, province, store_label, city_slug)
+        try:
+            run_one_store(store_id, city, province, store_label, city_slug)
+        except Exception as e:
+            print(f"\nERROR store {store_id}: {e}", file=sys.stderr)
+            if not CONTINUE_ON_ERROR:
+                raise
+            else:
+                # on skip l'index pour ce store
+                continue
 
         slug = store_slug(store_id, city_slug, province)
         index_entries.append(
@@ -255,8 +296,8 @@ def main():
 
     FINAL_DIR.mkdir(parents=True, exist_ok=True)
     FINAL_INDEX.write_text(json.dumps(index_entries, ensure_ascii=False, indent=2), encoding="utf-8")
-
     print("\nDone. Final files written to:", FINAL_DIR)
+
 
 if __name__ == "__main__":
     main()
