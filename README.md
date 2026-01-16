@@ -46,3 +46,16 @@ These steps are a short version of the official GitHub runner setup. Always copy
    ```
 
 > Keep the runner online on your PC when you trigger the workflow so GitHub can schedule the job.
+
+## Scraper display options
+
+By default, the scraper now runs in **headed mode** so you can see the pages scroll by while each store is scraped.
+
+Common flags:
+- `--headed` (default): show the browser UI.
+- `--headless`: run without displaying the browser.
+- `--max-pages N`: cap the number of pages per store.
+- `--timeout-ms N`: override the page timeout.
+- `--debug`: enable debug logging.
+
+You can also force headless mode in CI by setting `CANAC_HEADLESS=1`.

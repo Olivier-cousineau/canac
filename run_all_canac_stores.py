@@ -1,4 +1,6 @@
+import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -22,6 +24,8 @@ HEADLESS = True
 MAX_PAGES = None
 TIMEOUT_MS = None
 DEBUG = False
+
+HEADLESS_ENV = {"1", "true", "yes", "on"}
 
 def slugify(text: str) -> str:
     text = (text or "").strip().lower()
@@ -195,7 +199,37 @@ def run_one_store(store_id: int, city: str, province: str, store_label: str, cit
     if src_csv is None:
         print(f"WARNING: Aucun CSV trouvé pour store {store_id} dans {SOURCE_DIR} (on continue).")
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run CANAC scraper for all stores.")
+    parser.add_argument("--headed", action="store_true", help="Show the browser while scraping.")
+    parser.add_argument("--headless", action="store_true", help="Run the browser in headless mode.")
+    parser.add_argument("--max-pages", type=int, help="Limit the number of pages per store.")
+    parser.add_argument("--timeout-ms", type=int, help="Override page timeout in milliseconds.")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging for the scraper.")
+    return parser.parse_args()
+
+
+def resolve_headless(args) -> bool:
+    if args.headed and args.headless:
+        raise ValueError("Use only one of --headed or --headless.")
+    if args.headed:
+        return False
+    if args.headless:
+        return True
+    if os.getenv("CI"):
+        return True
+    env_flag = os.getenv("CANAC_HEADLESS", "").strip().lower()
+    return env_flag in HEADLESS_ENV
+
+
 def main():
+    args = parse_args()
+    global HEADLESS, MAX_PAGES, TIMEOUT_MS, DEBUG
+    HEADLESS = resolve_headless(args)
+    MAX_PAGES = args.max_pages
+    TIMEOUT_MS = args.timeout_ms
+    DEBUG = args.debug
+
     stores = load_stores()
     index_entries = []
 
