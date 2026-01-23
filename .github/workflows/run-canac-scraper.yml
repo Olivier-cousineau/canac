@@ -1,6 +1,8 @@
 name: Run CANAC Scraper (Self-hosted) and Publish + Artifact
 
 on:
+  schedule:
+    - cron: "0 4 * * 4"
   workflow_dispatch:
     inputs:
       scraper_path:
