@@ -54,7 +54,7 @@ jobs:
       - name: Run injection script
         if: ${{ inputs.run_injection == 'true' }}
         env:
-          ECONOPLUS_TOKEN: ${{ secrets.ECONOPLUS_TOKEN }}
+          ECONOPLUS_TOKEN: ${{ secrets.ECONOPLUS }}
         run: |
           if [ -z "${{ inputs.base_url }}" ] || [ -z "${{ inputs.ville }}" ] || [ -z "${{ inputs.site_id }}" ]; then
             echo "base_url, ville, and site_id are required when run_injection is true."
