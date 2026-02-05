@@ -202,16 +202,17 @@ def run_one_store(
     if not HEADLESS:
         cmd += ["--headed"]
 
-    result = subprocess.run(cmd, text=True, capture_output=True)
-    if result.returncode != 0:
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+    if proc.returncode != 0:
         print("CMD:", " ".join(cmd), file=sys.stderr)
         print("--- stdout ---", file=sys.stderr)
-        print(result.stdout or "<empty>", file=sys.stderr)
+        print(proc.stdout or "<empty>", file=sys.stderr)
         print("--- stderr ---", file=sys.stderr)
-        print(result.stderr or "<empty>", file=sys.stderr)
+        print(proc.stderr or "<empty>", file=sys.stderr)
+        print(f"Store {store_id} FAILED", file=sys.stderr)
         failed.append(store_id)
         if stop_on_fail:
-            raise RuntimeError(f"canac_scraper_magasin.py failed for store {store_id} (exit={result.returncode})")
+            raise RuntimeError(f"canac_scraper_magasin.py failed for store {store_id} (exit={proc.returncode})")
         return False
 
     print(f"OK scraper store {store_id}")
