@@ -84,14 +84,24 @@ jobs:
           Write-Host "Running: $env:SCRAPER_ENTRY"
           & $python $env:SCRAPER_ENTRY
 
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canac_debug
+          path: |
+            ${{ inputs.scraper_path }}\debug\**
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Upload CANAC output as artifact (preview)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: canac_output_preview
           path: |
-            ${{ inputs.scraper_path }}\${{ inputs.out_dir }}\*.json
-            ${{ inputs.scraper_path }}\${{ inputs.out_dir }}\*.csv
-          if-no-files-found: error
+            ${{ inputs.scraper_path }}\${{ inputs.out_dir }}\**
+          if-no-files-found: warn
           retention-days: 3
 
       - name: Publish to econoplus (reset->copy->commit->rebase->push)
