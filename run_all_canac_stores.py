@@ -24,7 +24,7 @@ HEADLESS = True
 MAX_PAGES = None
 TIMEOUT_MS = None
 DEBUG = False
-CONTINUE_ON_ERROR = False
+STOP_ON_FAIL = False
 
 HEADLESS_ENV = {"1", "true", "yes", "on"}
 
@@ -161,73 +161,85 @@ def write_output(dst_json: Path, items: list, payload: Optional[dict]):
     dst_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def run_scraper_magasin(store_id: int):
-    """
-    Lance canac_scraper_magasin.py et affiche stdout/stderr complet
-    pour diagnostiquer dans GitHub Actions.
-    IMPORTANT: on ne passe PAS --headless (souvent la cause des crashs).
-    On passe seulement --headed si demandé.
-    """
-    python_exe = sys.executable
-    script = str(BASE_DIR / "canac_scraper_magasin.py")
-
-    cmd = [
-        python_exe,
-        script,
-        "--store-id", str(store_id),
-        "--category", CATEGORY,
-    ]
-
-    if MAX_PAGES is not None:
-        cmd += ["--max-pages", str(MAX_PAGES)]
-    if TIMEOUT_MS is not None:
-        cmd += ["--timeout-ms", str(TIMEOUT_MS)]
-    if DEBUG:
-        cmd += ["--debug"]
-
-    # Changement clé:
-    # - Headless est le défaut (donc on ne passe rien)
-    # - On passe seulement --headed si on veut voir le navigateur
-    if not HEADLESS:
-        cmd += ["--headed"]
-
-    print("CMD:", " ".join(cmd))
-
-    result = subprocess.run(cmd, text=True, capture_output=True)
-
-    if result.stdout:
-        print("\n--- scraper stdout ---\n", result.stdout)
-    if result.stderr:
-        print("\n--- scraper stderr ---\n", result.stderr, file=sys.stderr)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"canac_scraper_magasin.py failed (exit={result.returncode})")
-
-
-def run_one_store(store_id: int, city: str, province: str, store_label: str, city_slug: str):
+def run_one_store(
+    store_id: int,
+    city: str,
+    province: str,
+    store_label: str,
+    city_slug: str,
+    failed: list[int],
+    stop_on_fail: bool,
+):
     SOURCE_DIR.mkdir(parents=True, exist_ok=True)
     FINAL_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"\n=== Store {store_id} {city} ({province}) ===")
 
     # 1) Run scraper magasin
-    run_scraper_magasin(store_id)
+    script = str(BASE_DIR / "canac_scraper_magasin.py")
+    if not Path(script).exists():
+        failed.append(store_id)
+        message = f"Missing scraper script: {script}"
+        print(message, file=sys.stderr)
+        if stop_on_fail:
+            raise FileNotFoundError(message)
+        return False
+
+    cmd = [
+        sys.executable,
+        script,
+        "--store-id",
+        str(store_id),
+        "--category",
+        CATEGORY,
+    ]
+    if MAX_PAGES is not None:
+        cmd += ["--max-pages", str(MAX_PAGES)]
+    if TIMEOUT_MS is not None:
+        cmd += ["--timeout-ms", str(TIMEOUT_MS)]
+    if DEBUG:
+        cmd += ["--debug"]
+    if not HEADLESS:
+        cmd += ["--headed"]
+
+    result = subprocess.run(cmd, text=True, capture_output=True)
+    if result.returncode != 0:
+        print("CMD:", " ".join(cmd), file=sys.stderr)
+        print("--- stdout ---", file=sys.stderr)
+        print(result.stdout or "<empty>", file=sys.stderr)
+        print("--- stderr ---", file=sys.stderr)
+        print(result.stderr or "<empty>", file=sys.stderr)
+        failed.append(store_id)
+        if stop_on_fail:
+            raise RuntimeError(f"canac_scraper_magasin.py failed for store {store_id} (exit={result.returncode})")
+        return False
+
+    print(f"OK scraper store {store_id}")
 
     # 2) Trouver le JSON généré dans data/
     wanted_json = wanted_paths(store_id, city_slug, province)
     src_json = find_store_outputs(store_id)
 
     if src_json is None:
-        raise FileNotFoundError(
+        failed.append(store_id)
+        if stop_on_fail:
+            raise FileNotFoundError(
+                f"Aucun JSON trouvé pour store {store_id} dans {SOURCE_DIR}. "
+                f"Vérifie que canac_scraper_magasin.py écrit bien dans data/."
+            )
+        print(
             f"Aucun JSON trouvé pour store {store_id} dans {SOURCE_DIR}. "
-            f"Vérifie que canac_scraper_magasin.py écrit bien dans data/."
+            f"Vérifie que canac_scraper_magasin.py écrit bien dans data/.",
+            file=sys.stderr,
         )
+        return False
 
     # 3) Normaliser + écrire dans public/canac/<slug>/liquidations.json
     items, payload = load_items(src_json)
     normalized = [normalize_item(item, store_id, store_label) for item in items]
     write_output(wanted_json, normalized, payload)
     print(f"OK JSON -> {wanted_json}")
+    return True
 
 
 def parse_args():
@@ -237,7 +249,11 @@ def parse_args():
     parser.add_argument("--max-pages", type=int, help="Limit the number of pages per store.")
     parser.add_argument("--timeout-ms", type=int, help="Override page timeout in milliseconds.")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for the scraper.")
-    parser.add_argument("--continue-on-error", action="store_true", help="Continue even if a store fails.")
+    parser.add_argument(
+        "--stop-on-fail",
+        action="store_true",
+        help="Stop immediately when one store fails (default: continue all stores).",
+    )
     return parser.parse_args()
 
 
@@ -256,15 +272,16 @@ def resolve_headless(args) -> bool:
 
 def main():
     args = parse_args()
-    global HEADLESS, MAX_PAGES, TIMEOUT_MS, DEBUG, CONTINUE_ON_ERROR
+    global HEADLESS, MAX_PAGES, TIMEOUT_MS, DEBUG, STOP_ON_FAIL
     HEADLESS = resolve_headless(args)
     MAX_PAGES = args.max_pages
     TIMEOUT_MS = args.timeout_ms
     DEBUG = args.debug
-    CONTINUE_ON_ERROR = args.continue_on_error
+    STOP_ON_FAIL = args.stop_on_fail
 
     stores = load_stores()
     index_entries = []
+    failed_store_ids: list[int] = []
 
     for s in stores:
         store_id = int(s["store_id"])
@@ -274,14 +291,25 @@ def main():
         city_slug = slugify(city)
 
         try:
-            run_one_store(store_id, city, province, store_label, city_slug)
+            ok = run_one_store(
+                store_id,
+                city,
+                province,
+                store_label,
+                city_slug,
+                failed_store_ids,
+                STOP_ON_FAIL,
+            )
         except Exception as e:
             print(f"\nERROR store {store_id}: {e}", file=sys.stderr)
-            if not CONTINUE_ON_ERROR:
+            if store_id not in failed_store_ids:
+                failed_store_ids.append(store_id)
+            if STOP_ON_FAIL:
                 raise
-            else:
-                # on skip l'index pour ce store
-                continue
+            continue
+
+        if not ok:
+            continue
 
         slug = store_slug(store_id, city_slug, province)
         index_entries.append(
@@ -297,6 +325,11 @@ def main():
     FINAL_DIR.mkdir(parents=True, exist_ok=True)
     FINAL_INDEX.write_text(json.dumps(index_entries, ensure_ascii=False, indent=2), encoding="utf-8")
     print("\nDone. Final files written to:", FINAL_DIR)
+
+    if failed_store_ids:
+        failed_unique = sorted(set(failed_store_ids))
+        print(f"\nFAILED STORES ({len(failed_unique)}): {failed_unique}", file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
