@@ -104,6 +104,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
+      - name: Upload CANAC output for Supabase
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canac_supabase_data
+          path: |
+            ${{ inputs.scraper_path }}\${{ inputs.out_dir }}\**\*.json
+          if-no-files-found: ignore
+          retention-days: 1
+
       - name: Publish to econoplus (reset->copy->commit->rebase->push)
         shell: powershell
         env:
@@ -148,3 +158,38 @@ jobs:
           # 4) Sécurité: si quelqu’un a push entre-temps, rebase puis push
           git pull --rebase origin main
           git push origin main
+
+  upsert-to-supabase:
+    needs: run-and-publish
+    if: always() && needs.run-and-publish.result == ‘success’
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download Canac data
+        uses: actions/download-artifact@v4
+        with:
+          name: canac_supabase_data
+          path: canac_data
+        continue-on-error: true
+
+      - name: Install dependencies
+        run: npm install --omit=dev
+
+      - name: Upsert to Supabase
+        if: env.SUPABASE_URL != ‘’
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -d canac_data ] && [ "$(find canac_data -name ‘*.json’ | head -1)" ]; then
+            node scripts/upsert_to_supabase.mjs canac "canac_data/**/*.json"
+          else
+            echo "No Canac data found, skipping"
+          fi
